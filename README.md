@@ -172,7 +172,7 @@ uv run python -m src.40_run_use_cases --features relational json spatial
 uv run python -m src.50_visualizations --circuit Singapore
 ```
 
-This creates interactive HTML visualizations in `output/visualizations/`, organized by Oracle capability:
+This creates interactive HTML visualizations in `output/visualizations/`. FastF1 contains X/y coordinates but not lat/lon. Therefore those coordinates are transformed into lat/lon in 50_visualizations. Currently Singapore only is configured for the transformation. Other circuits need transformation settings in CIRCUIT_CONFIGS. 
 
 All visualizations use a consistent professional F1 theme (black background, gold/red accents):
 
