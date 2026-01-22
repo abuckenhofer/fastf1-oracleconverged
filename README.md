@@ -72,7 +72,7 @@ ORA_PASSWORD=YourPassword123
 # Use FREEPDB1 for gvenzl/oracle-free, XEPDB1 for gvenzl/oracle-xe
 ORA_DSN=localhost:1521/FREEPDB1
 ```
-Set appropriate privileges to the user so that the user can create resources like tables and query dictionary tables like v$database. Enable the In-Memory option by setting [inmemory_size](https://docs.github.com/de/get-started/writing-on-github/getting-started-with-writing-and-formatting-on-github/basic-writing-and-formatting-syntax).
+Set appropriate privileges to the user so that the user can create resources like tables and query dictionary tables like v$database. Enable the In-Memory option by setting [inmemory_size](https://blogs.oracle.com/coretec/oracle-database-in-memory-der-schnelle-einstieg).
 Alternatively, set environment variables directly:
 
 ```bash
