@@ -224,6 +224,7 @@ fastf1-oracleconverged/
 │   └── 50_visualizations.py    # Interactive visualizations
 ├── lakehouse/
 │   └── 01_bronze/              # Exported CSV/JSON files
+├── cache                       # Buffering FastF1 data
 └── output/
     └── visualizations/         # Generated HTML visualizations
 ```

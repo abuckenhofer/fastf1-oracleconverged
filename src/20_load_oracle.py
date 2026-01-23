@@ -287,7 +287,7 @@ class OracleF1Loader:
                 doc_type VARCHAR2(50) NOT NULL,
                 event_id NUMBER REFERENCES dim_event(event_id),
                 driver_id NUMBER REFERENCES dim_driver(driver_id),
-                payload CLOB CONSTRAINT chk_payload_json CHECK (payload IS JSON),
+                payload JSON CONSTRAINT chk_payload_json CHECK (payload IS JSON),
                 ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
 
