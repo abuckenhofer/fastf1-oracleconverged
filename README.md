@@ -1,6 +1,6 @@
 # Oracle Converged Database Demo - Formula 1 Data
 
-This project demonstrates Oracle Database 26ai "Converged Database" capabilities using real Formula 1 telemetry, lap times, and race data.
+This project demonstrates Oracle Database "Converged Database" capabilities using real Formula 1 telemetry, lap times, and race data. An article describing the why, how, what can be found on my [data.KISS](https://buckenhofer.com/2026/01/one-database-six-workloads/) blog.
 
 ## What This Demo Proves
 
