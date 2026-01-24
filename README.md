@@ -26,26 +26,17 @@ Oracle's Converged Database allows you to use **multiple data models and workloa
 
 ```bash
 # Oracle Free (recommended - full feature set)
-docker run -d --name oraclexe \
+docker run -d --name oraclefree \
   -p 1521:1521 \
   -e ORACLE_PASSWORD=YourPassword123 \
   -v oracle-volume:/opt/oracle/oradata \
   gvenzl/oracle-free
-
-# Or Oracle XE (21c - no VECTOR/Graph support)
-# docker run -d --name oraclexe \
-#   -p 1521:1521 \
-#   -e ORACLE_PASSWORD=YourPassword123 \
-#   -v oracle-volume:/opt/oracle/oradata \
-#   gvenzl/oracle-xe
 ```
 
 Wait for the container to be healthy (~2-3 minutes):
 ```bash
-docker logs -f oraclexe
+docker logs -f oraclefree
 ```
-
-**Note:** Use `FREEPDB1` as service name for oracle-free, `XEPDB1` for oracle-xe.
 
 ## Installation
 
@@ -69,10 +60,9 @@ Edit `.env`:
 ```bash
 ORA_USER=myuser
 ORA_PASSWORD=YourPassword123
-# Use FREEPDB1 for gvenzl/oracle-free, XEPDB1 for gvenzl/oracle-xe
 ORA_DSN=localhost:1521/FREEPDB1
 ```
-Set appropriate privileges to the user so that the user can create resources like tables and query dictionary tables like v$database. Enable the In-Memory option by setting [inmemory_size](https://blogs.oracle.com/coretec/oracle-database-in-memory-der-schnelle-einstieg).
+Set appropriate privileges for myuser so that the user can create resources like tables and query dictionary tables like v$database. 
 Alternatively, set environment variables directly:
 
 ```bash
@@ -89,7 +79,7 @@ $env:ORA_DSN = "localhost:1521/FREEPDB1"
 
 ## Running the Demo
 
-### Step 1: Verify Oracle Connection
+### Step 0: Verify Oracle Connection
 
 ```bash
 uv run python -m src.00_env_check
@@ -124,7 +114,7 @@ Connection successful!
 Environment check PASSED
 ```
 
-### Step 2: Export F1 Data
+### Step 1: Export F1 Data
 
 Export the F1 telemetry data to CSV/JSON files in `lakehouse/01_bronze/`:
 
@@ -132,7 +122,7 @@ Export the F1 telemetry data to CSV/JSON files in `lakehouse/01_bronze/`:
 uv run python -m src.10_export_f1_data --year 2024 --gp "Singapore" --session R
 ```
 
-### Step 3: Load Data into Oracle
+### Step 2: Load Data into Oracle
 
 ```bash
 uv run python -m src.20_load_oracle --year 2024 --gp "Singapore" --session R
@@ -145,7 +135,7 @@ This creates all tables and loads:
 - Spatial data (SDO_GEOMETRY points)
 - JSON documents (raw messages, session info)
 
-### Step 4: Build Vector Embeddings
+### Step 3: Build Vector Embeddings
 
 ```bash
 uv run python -m src.30_build_embeddings --year 2024 --gp "Singapore" --session R
@@ -155,7 +145,7 @@ This generates embeddings for race control messages using:
 - `sentence-transformers` model (all-MiniLM-L6-v2) if available
 - Deterministic hash-based fallback otherwise
 
-### Step 5: Run Demo Use Cases
+### Step 4: Run Demo Use Cases
 
 ```bash
 uv run python -m src.40_run_use_cases --year 2024 --gp "Singapore" --session R
@@ -166,7 +156,7 @@ Or run specific features:
 uv run python -m src.40_run_use_cases --features relational json spatial
 ```
 
-### Step 6: Generate Visualizations
+### Step 5: Generate Visualizations
 
 ```bash
 uv run python -m src.50_visualizations --circuit Singapore
@@ -186,24 +176,13 @@ All visualizations use a consistent professional F1 theme (black background, gol
 | **Vector** | `messages_timeline.html` | Race control messages timeline by category |
 | **Relational** | `data_model.html` | Sankey diagram showing star schema data flow |
 | **Relational** | `table_summary.html` | Table row counts by type |
+| **Relational** | `tire_degradation.html` | Heatmap showing lap time degradation by tire life (FIRST_VALUE analytics) |
+| **Relational** | `driver_consistency.html` | Box plots of lap time distribution sorted by STDDEV |
 | **JSON** | `json_structure.html` | Treemap of JSON document hierarchy |
+| **Time Series** | `pit_strategy.html` | Gantt-style timeline showing stint lengths and compound choices (LEAD function) |
+| **Time Series** | `position_chart.html` | Classic F1 position chart showing race progression (LAG function) |
 
-Run specific visualizations:
-```bash
-# Spatial visualizations
-uv run python -m src.50_visualizations --viz circuit speed
 
-# Vector visualizations
-uv run python -m src.50_visualizations --viz embeddings
-
-# Overtake network (Graph/Relational)
-uv run python -m src.50_visualizations --viz overtake
-
-# Multiple capabilities
-uv run python -m src.50_visualizations --viz overtake model json
-
-# Available options: circuit, speed, overtake, embeddings, semantic, timeline, model, summary, json, all
-```
 
 ## Project Structure
 

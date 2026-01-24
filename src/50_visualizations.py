@@ -8,8 +8,9 @@ Visualizations:
 1. Spatial: Circuit map with telemetry overlay, speed trace
 2. Graph/Relational: Overtake network
 3. Vector: PCA projection of embeddings, semantic search comparison
-4. Relational: Star schema data model
+4. Relational: Star schema data model, tire degradation, driver consistency
 5. JSON: Document structure treemap
+6. Time Series: Pit strategy timeline, position chart
 """
 
 import os
@@ -1168,6 +1169,547 @@ class F1Visualizer:
         return str(output_path)
 
     # =========================================================================
+    # 6. RELATIONAL: Tire Degradation Heatmap
+    # =========================================================================
+
+    def create_tire_degradation_heatmap(self) -> str:
+        """
+        Create heatmap showing tire degradation patterns per driver/stint.
+        Showcases FIRST_VALUE and window partition functions.
+        """
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+
+        logger.info("Creating tire degradation heatmap...")
+
+        cursor = self.connection.cursor()
+
+        cursor.execute("""
+            SELECT
+                d.driver_code,
+                l.stint_number,
+                c.compound_name,
+                l.tyre_life,
+                ROUND(l.lap_time_sec, 3) AS lap_time,
+                ROUND(l.lap_time_sec - FIRST_VALUE(l.lap_time_sec) OVER (
+                    PARTITION BY l.driver_id, l.stint_number
+                    ORDER BY l.lap_number
+                ), 3) AS degradation_from_fresh
+            FROM fact_lap l
+            JOIN dim_driver d ON l.driver_id = d.driver_id
+            LEFT JOIN dim_compound c ON l.compound_id = c.compound_id
+            WHERE l.is_accurate = 1
+              AND l.tyre_life IS NOT NULL
+              AND l.tyre_life > 0
+            ORDER BY d.driver_code, l.stint_number, l.tyre_life
+        """)
+
+        rows = cursor.fetchall()
+        cursor.close()
+
+        if not rows:
+            logger.warning("No lap data found for tire degradation")
+            return None
+
+        df = pd.DataFrame(rows, columns=[
+            'driver', 'stint', 'compound', 'tyre_life', 'lap_time', 'degradation'
+        ])
+
+        # Compound colors matching F1 convention
+        compound_colors = {
+            'SOFT': '#FF3333',
+            'MEDIUM': '#FFF200',
+            'HARD': '#EBEBEB',
+            'INTERMEDIATE': '#39B54A',
+            'WET': '#00AEEF'
+        }
+
+        # Get unique drivers sorted by average degradation (best managers first)
+        driver_avg_deg = df.groupby('driver')['degradation'].mean().sort_values()
+        drivers = driver_avg_deg.index.tolist()
+
+        # Create pivot for heatmap: driver x tyre_life
+        max_tyre_life = min(int(df['tyre_life'].max()), 25)  # Cap at 25 laps
+
+        # Build heatmap matrix
+        heat_data = []
+        for driver in drivers:
+            driver_df = df[df['driver'] == driver]
+            row = []
+            for life in range(1, max_tyre_life + 1):
+                life_data = driver_df[driver_df['tyre_life'] == life]['degradation']
+                if len(life_data) > 0:
+                    row.append(life_data.mean())
+                else:
+                    row.append(None)
+            heat_data.append(row)
+
+        fig = go.Figure()
+
+        # Replace None with NaN for proper heatmap handling
+        import numpy as np
+        heat_array = np.array([[np.nan if v is None else v for v in row] for row in heat_data])
+
+        # Custom colorscale: green (no degradation) -> gold -> red (high degradation)
+        colorscale = [
+            [0.0, '#1a472a'],      # Dark green (fresh)
+            [0.3, '#50C878'],      # Green (minimal deg)
+            [0.5, F1Theme.GOLD],   # Gold (moderate)
+            [0.7, '#FF8C00'],      # Orange
+            [1.0, F1Theme.RED]     # Red (heavy deg)
+        ]
+
+        # Calculate valid range for color scaling
+        valid_values = heat_array[~np.isnan(heat_array)]
+        zmin = 0 if len(valid_values) == 0 else float(np.nanmin(valid_values))
+        zmax = 5 if len(valid_values) == 0 else float(np.nanmax(valid_values))
+
+        fig.add_trace(go.Heatmap(
+            z=heat_array,
+            x=list(range(1, max_tyre_life + 1)),
+            y=drivers,
+            colorscale=colorscale,
+            zmin=zmin,
+            zmax=zmax,
+            connectgaps=False,
+            hoverongaps=False,
+            colorbar=dict(
+                title=dict(text='Degradation (sec)', font=dict(color=F1Theme.TEXT_PRIMARY)),
+                tickfont=dict(color=F1Theme.TEXT_SECONDARY),
+                bgcolor=F1Theme.PAPER,
+                bordercolor=F1Theme.BORDER,
+                borderwidth=1
+            ),
+            hovertemplate='<b>%{y}</b><br>Tyre Life: %{x} laps<br>Degradation: %{z:.3f}s<extra></extra>'
+        ))
+
+        layout = F1Theme.plotly_layout(
+            title='TIRE DEGRADATION ANALYSIS',
+            subtitle='Lap time increase from fresh tyres',
+            width=1100,
+            height=700
+        )
+        layout['xaxis'].update(title='Tyre Life (laps)', dtick=2)
+        layout['yaxis'].update(title='', tickfont=dict(size=10))
+
+        fig.update_layout(**layout)
+
+        # Add annotation for best tire manager
+        best_manager = drivers[0]
+        fig.add_annotation(
+            x=max_tyre_life * 0.8,
+            y=best_manager,
+            text=f"Best tire management: {best_manager}",
+            showarrow=True,
+            arrowhead=2,
+            arrowcolor=F1Theme.GOLD,
+            font=dict(color=F1Theme.GOLD, size=11),
+            bgcolor=F1Theme.PAPER,
+            borderpad=4
+        )
+
+        output_path = self.output_dir / "tire_degradation.html"
+        fig.write_html(str(output_path))
+        logger.info(f"Saved tire degradation heatmap to {output_path}")
+
+        return str(output_path)
+
+    # =========================================================================
+    # 7. RELATIONAL: Driver Consistency Chart
+    # =========================================================================
+
+    def create_driver_consistency_chart(self) -> str:
+        """
+        Create box/violin plot showing lap time consistency per driver.
+        Showcases STDDEV, PERCENTILE_CONT analytics.
+        """
+        import plotly.graph_objects as go
+
+        logger.info("Creating driver consistency chart...")
+
+        cursor = self.connection.cursor()
+
+        cursor.execute("""
+            SELECT
+                d.driver_code,
+                d.full_name,
+                t.team_name,
+                t.team_color,
+                l.lap_time_sec
+            FROM fact_lap l
+            JOIN dim_driver d ON l.driver_id = d.driver_id
+            JOIN bridge_driver_team bdt ON d.driver_id = bdt.driver_id
+            JOIN dim_team t ON bdt.team_id = t.team_id
+            WHERE l.is_accurate = 1
+              AND l.lap_time_sec < 130
+              AND l.lap_time_sec > 90
+            ORDER BY d.driver_code
+        """)
+
+        rows = cursor.fetchall()
+        cursor.close()
+
+        if not rows:
+            logger.warning("No lap data found for consistency analysis")
+            return None
+
+        df = pd.DataFrame(rows, columns=['driver', 'name', 'team', 'team_color', 'lap_time'])
+
+        # Calculate consistency stats per driver
+        stats = df.groupby(['driver', 'name', 'team', 'team_color']).agg({
+            'lap_time': ['mean', 'std', 'median', 'count']
+        }).reset_index()
+        stats.columns = ['driver', 'name', 'team', 'team_color', 'mean', 'std', 'median', 'count']
+        stats = stats.sort_values('std')  # Sort by consistency (best first)
+
+        fig = go.Figure()
+
+        # Add box plot for each driver (sorted by consistency)
+        for _, row in stats.iterrows():
+            driver_data = df[df['driver'] == row['driver']]['lap_time']
+            color = f"#{row['team_color']}" if row['team_color'] else F1Theme.TEXT_MUTED
+
+            fig.add_trace(go.Box(
+                y=driver_data,
+                name=row['driver'],
+                marker_color=color,
+                line=dict(color=color),
+                boxmean='sd',
+                hovertemplate=(
+                    f"<b>{row['driver']}</b> ({row['team']})<br>" +
+                    "Lap time: %{y:.3f}s<extra></extra>"
+                )
+            ))
+
+        layout = F1Theme.plotly_layout(
+            title='DRIVER CONSISTENCY ANALYSIS',
+            subtitle='Lap time distribution sorted by STDDEV (most consistent first)',
+            width=1200,
+            height=650
+        )
+        layout['xaxis'].update(title='Drivers (sorted by consistency)', tickangle=-45)
+        layout['yaxis'].update(title='Lap Time (seconds)')
+        layout['showlegend'] = False
+
+        fig.update_layout(**layout)
+
+        # Add consistency ranking annotation
+        top3 = stats.head(3)
+        annotation_text = "<b>Most Consistent:</b><br>"
+        for i, (_, row) in enumerate(top3.iterrows(), 1):
+            annotation_text += f"{i}. {row['driver']} (σ={row['std']:.3f}s)<br>"
+
+        fig.add_annotation(
+            x=0.02, y=0.98,
+            xref='paper', yref='paper',
+            text=annotation_text,
+            showarrow=False,
+            font=dict(size=11, color=F1Theme.TEXT_PRIMARY),
+            bgcolor=F1Theme.PAPER,
+            borderpad=8,
+            bordercolor=F1Theme.GOLD,
+            borderwidth=1,
+            align='left'
+        )
+
+        output_path = self.output_dir / "driver_consistency.html"
+        fig.write_html(str(output_path))
+        logger.info(f"Saved driver consistency chart to {output_path}")
+
+        return str(output_path)
+
+    # =========================================================================
+    # 8. TIME SERIES: Pit Stop Strategy Timeline
+    # =========================================================================
+
+    def create_pit_strategy_timeline(self) -> str:
+        """
+        Create Gantt-style timeline showing pit stop strategy per driver.
+        Showcases LEAD function and stint analysis.
+        """
+        import plotly.graph_objects as go
+
+        logger.info("Creating pit strategy timeline...")
+
+        cursor = self.connection.cursor()
+
+        # Get stint information per driver
+        cursor.execute("""
+            SELECT
+                d.driver_code,
+                r.final_position,
+                l.stint_number,
+                c.compound_name,
+                MIN(l.lap_number) AS stint_start,
+                MAX(l.lap_number) AS stint_end,
+                COUNT(*) AS stint_laps
+            FROM fact_lap l
+            JOIN dim_driver d ON l.driver_id = d.driver_id
+            JOIN fact_result r ON l.driver_id = r.driver_id AND l.event_id = r.event_id
+            LEFT JOIN dim_compound c ON l.compound_id = c.compound_id
+            WHERE l.stint_number IS NOT NULL
+            GROUP BY d.driver_id, d.driver_code, r.final_position, l.stint_number, c.compound_name
+            ORDER BY r.final_position, l.stint_number
+        """)
+
+        rows = cursor.fetchall()
+        cursor.close()
+
+        if not rows:
+            logger.warning("No stint data found")
+            return None
+
+        df = pd.DataFrame(rows, columns=[
+            'driver', 'position', 'stint', 'compound', 'start_lap', 'end_lap', 'laps'
+        ])
+
+        # Compound colors - muted/darker versions to reduce glare
+        compound_colors = {
+            'SOFT': '#C41E3A',      # Muted red (cardinal)
+            'MEDIUM': '#B8860B',    # Dark goldenrod (muted yellow)
+            'HARD': '#808080',      # Gray instead of bright white
+            'INTERMEDIATE': '#2E8B57',  # Sea green (muted)
+            'WET': '#4682B4'        # Steel blue (muted)
+        }
+
+        # Sort drivers by finishing position
+        drivers = df.sort_values('position')['driver'].unique()
+        max_lap = df['end_lap'].max()
+
+        fig = go.Figure()
+
+        # Create Gantt bars for each stint
+        for i, driver in enumerate(drivers):
+            driver_df = df[df['driver'] == driver].sort_values('stint')
+
+            for _, stint in driver_df.iterrows():
+                compound = stint['compound'] if stint['compound'] else 'MEDIUM'
+                color = compound_colors.get(compound, F1Theme.TEXT_MUTED)
+
+                fig.add_trace(go.Bar(
+                    x=[stint['end_lap'] - stint['start_lap'] + 1],
+                    y=[driver],
+                    base=stint['start_lap'] - 1,
+                    orientation='h',
+                    marker=dict(
+                        color=color,
+                        opacity=0.85,
+                        line=dict(color=F1Theme.BACKGROUND, width=1)
+                    ),
+                    name=compound,
+                    showlegend=False,
+                    width=0.6,  # Thinner bars
+                    hovertemplate=(
+                        f"<b>{driver}</b><br>"
+                        f"Stint {stint['stint']}: {compound}<br>"
+                        f"Laps {stint['start_lap']}-{stint['end_lap']} ({stint['laps']} laps)"
+                        "<extra></extra>"
+                    )
+                ))
+
+        # Add pit stop markers - subtle vertical lines
+        for driver in drivers:
+            driver_df = df[df['driver'] == driver].sort_values('stint')
+            pit_laps = driver_df['start_lap'].iloc[1:].tolist()  # Pit on lap before stint start
+
+            for pit_lap in pit_laps:
+                fig.add_trace(go.Scatter(
+                    x=[pit_lap - 0.5],
+                    y=[driver],
+                    mode='markers',
+                    marker=dict(
+                        symbol='line-ns',
+                        size=12,  # Smaller markers
+                        color=F1Theme.GOLD,
+                        line=dict(width=1.5, color=F1Theme.GOLD),
+                        opacity=0.8
+                    ),
+                    showlegend=False,
+                    hovertemplate=f"<b>{driver}</b><br>Pit stop lap {pit_lap-1}<extra></extra>"
+                ))
+
+        layout = F1Theme.plotly_layout(
+            title='PIT STOP STRATEGY',
+            subtitle='Stint duration by compound | Sorted by finishing position',
+            width=1200,
+            height=700
+        )
+
+        layout['xaxis'].update(
+            title='Lap Number',
+            range=[0, max_lap + 2],
+            dtick=5,
+            gridcolor=F1Theme.GRID
+        )
+        layout['yaxis'].update(
+            title='',
+            tickfont=dict(size=9),
+            categoryorder='array',
+            categoryarray=list(reversed(drivers))
+        )
+        layout['barmode'] = 'stack'
+        layout['bargap'] = 0.3  # More space between driver rows
+
+        fig.update_layout(**layout)
+
+        # Add compound legend
+        for compound, color in compound_colors.items():
+            if compound in df['compound'].values:
+                fig.add_trace(go.Scatter(
+                    x=[None], y=[None],
+                    mode='markers',
+                    marker=dict(size=12, color=color, symbol='square'),
+                    name=compound,
+                    showlegend=True
+                ))
+
+        fig.update_layout(
+            legend=dict(
+                orientation='h',
+                yanchor='bottom',
+                y=1.02,
+                xanchor='center',
+                x=0.5,
+                title=dict(text='Compound: ', font=dict(color=F1Theme.TEXT_SECONDARY))
+            )
+        )
+
+        output_path = self.output_dir / "pit_strategy.html"
+        fig.write_html(str(output_path))
+        logger.info(f"Saved pit strategy timeline to {output_path}")
+
+        return str(output_path)
+
+    # =========================================================================
+    # 9. TIME SERIES: Position Chart
+    # =========================================================================
+
+    def create_position_chart(self) -> str:
+        """
+        Create classic F1 position chart showing race progression.
+        Showcases LAG function for position change detection.
+        """
+        import plotly.graph_objects as go
+
+        logger.info("Creating position chart...")
+
+        cursor = self.connection.cursor()
+
+        cursor.execute("""
+            SELECT
+                d.driver_code,
+                t.team_color,
+                l.lap_number,
+                l.position,
+                l.position - LAG(l.position) OVER (
+                    PARTITION BY l.driver_id ORDER BY l.lap_number
+                ) AS position_delta
+            FROM fact_lap l
+            JOIN dim_driver d ON l.driver_id = d.driver_id
+            JOIN bridge_driver_team bdt ON d.driver_id = bdt.driver_id
+            JOIN dim_team t ON bdt.team_id = t.team_id
+            WHERE l.position IS NOT NULL
+            ORDER BY d.driver_code, l.lap_number
+        """)
+
+        rows = cursor.fetchall()
+        cursor.close()
+
+        if not rows:
+            logger.warning("No position data found")
+            return None
+
+        df = pd.DataFrame(rows, columns=['driver', 'team_color', 'lap', 'position', 'delta'])
+
+        fig = go.Figure()
+
+        # Get unique drivers and their team colors
+        drivers = df['driver'].unique()
+
+        for driver in drivers:
+            driver_df = df[df['driver'] == driver].sort_values('lap')
+            team_color = driver_df['team_color'].iloc[0]
+            color = f"#{team_color}" if team_color else F1Theme.TEXT_MUTED
+
+            # Count overtakes
+            overtakes = len(driver_df[driver_df['delta'] < 0])
+            positions_lost = len(driver_df[driver_df['delta'] > 0])
+
+            fig.add_trace(go.Scatter(
+                x=driver_df['lap'],
+                y=driver_df['position'],
+                mode='lines+markers',
+                name=driver,
+                line=dict(color=color, width=2),
+                marker=dict(size=4, color=color),
+                hovertemplate=(
+                    f"<b>{driver}</b><br>"
+                    "Lap %{x}<br>"
+                    "Position: P%{y}<br>"
+                    f"Overtakes: {overtakes} | Lost: {positions_lost}"
+                    "<extra></extra>"
+                )
+            ))
+
+        max_lap = df['lap'].max()
+        max_pos = df['position'].max()
+
+        layout = F1Theme.plotly_layout(
+            title='RACE POSITION CHART',
+            subtitle='Position changes throughout the race | Team colors',
+            width=1300,
+            height=750
+        )
+
+        layout['xaxis'].update(
+            title='Lap',
+            range=[0, max_lap + 1],
+            dtick=5,
+            gridcolor=F1Theme.GRID
+        )
+        layout['yaxis'].update(
+            title='Position',
+            range=[max_pos + 0.5, 0.5],  # Inverted: P1 at top
+            dtick=1,
+            gridcolor=F1Theme.GRID
+        )
+
+        fig.update_layout(**layout)
+
+        # Position axis labels
+        fig.update_yaxes(
+            tickmode='array',
+            tickvals=list(range(1, int(max_pos) + 1)),
+            ticktext=[f'P{i}' for i in range(1, int(max_pos) + 1)]
+        )
+
+        # Add annotation for most positions gained
+        position_changes = df.groupby('driver').agg({
+            'delta': lambda x: -x[x < 0].sum()  # Positions gained (negative delta = gain)
+        }).reset_index()
+        position_changes.columns = ['driver', 'gained']
+        top_mover = position_changes.loc[position_changes['gained'].idxmax()]
+
+        fig.add_annotation(
+            x=0.02, y=0.02,
+            xref='paper', yref='paper',
+            text=f"<b>Most positions gained:</b> {top_mover['driver']} (+{int(top_mover['gained'])})",
+            showarrow=False,
+            font=dict(size=11, color=F1Theme.GOLD),
+            bgcolor=F1Theme.PAPER,
+            borderpad=8,
+            bordercolor=F1Theme.GOLD,
+            borderwidth=1,
+            align='left'
+        )
+
+        output_path = self.output_dir / "position_chart.html"
+        fig.write_html(str(output_path))
+        logger.info(f"Saved position chart to {output_path}")
+
+        return str(output_path)
+
+    # =========================================================================
     # CREATE ALL
     # =========================================================================
 
@@ -1215,6 +1757,30 @@ class F1Visualizer:
         except Exception as e:
             logger.error(f"JSON structure failed: {e}")
 
+        # 7. Tire degradation (Relational)
+        try:
+            results['tire_degradation'] = self.create_tire_degradation_heatmap()
+        except Exception as e:
+            logger.error(f"Tire degradation failed: {e}")
+
+        # 8. Driver consistency (Relational)
+        try:
+            results['driver_consistency'] = self.create_driver_consistency_chart()
+        except Exception as e:
+            logger.error(f"Driver consistency failed: {e}")
+
+        # 9. Pit strategy timeline (Time Series)
+        try:
+            results['pit_strategy'] = self.create_pit_strategy_timeline()
+        except Exception as e:
+            logger.error(f"Pit strategy timeline failed: {e}")
+
+        # 10. Position chart (Time Series)
+        try:
+            results['position_chart'] = self.create_position_chart()
+        except Exception as e:
+            logger.error(f"Position chart failed: {e}")
+
         logger.info("=" * 60)
         logger.info("Visualization Summary:")
         for name, path in results.items():
@@ -1239,7 +1805,8 @@ def main():
     parser.add_argument(
         "--viz", type=str, nargs="+",
         choices=["circuit", "speed", "overtake", "embeddings", "semantic",
-                 "timeline", "model", "summary", "json", "all"],
+                 "timeline", "model", "summary", "json", "degradation",
+                 "consistency", "pitstrategy", "positions", "all"],
         default=["all"],
         help="Which visualizations to create (default: all)"
     )
@@ -1275,6 +1842,14 @@ def main():
                 viz.create_data_model_diagram()
             if "json" in args.viz:
                 viz.create_json_tree()
+            if "degradation" in args.viz:
+                viz.create_tire_degradation_heatmap()
+            if "consistency" in args.viz:
+                viz.create_driver_consistency_chart()
+            if "pitstrategy" in args.viz:
+                viz.create_pit_strategy_timeline()
+            if "positions" in args.viz:
+                viz.create_position_chart()
 
     except Exception as e:
         logger.error(f"Visualization failed: {e}")
