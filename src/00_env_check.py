@@ -133,17 +133,17 @@ def check_oracle_connection():
             print("  Spatial (SDO):      Not available")
 
         # Check for In-Memory Column Store
-        #try:
-        #    cursor.execute("SELECT value FROM v$parameter WHERE name = 'inmemory_size'")
-        #    row = cursor.fetchone()
-        #    inmemory_size = int(row[0]) if row else 0
-        #    if inmemory_size > 0:
-        #        size_gb = inmemory_size / (1024 * 1024 * 1024)
-        #        print(f"  In-Memory Store:    Available ({size_gb:.1f} GB)")
-        #    else:
-        #        print("  In-Memory Store:    Not enabled (inmemory_size=0)")
-        #except oracledb.DatabaseError:
-        #    print("  In-Memory Store:    Not available or no permissions")
+        try:
+            cursor.execute("SELECT value FROM v$parameter WHERE name = 'inmemory_size'")
+            row = cursor.fetchone()
+            inmemory_size = int(row[0]) if row else 0
+            if inmemory_size > 0:
+                size_gb = inmemory_size / (1024 * 1024 * 1024)
+                print(f"  In-Memory Store:    Available ({size_gb:.1f} GB)")
+            else:
+                print("  In-Memory Store:    Not enabled (inmemory_size=0), but ok for the demo.")
+        except oracledb.DatabaseError:
+            print("  In-Memory Store:    Not available or no permissions")
 
         print("\n" + "-" * 60)
         print("Connection successful!")
