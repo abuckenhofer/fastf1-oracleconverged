@@ -62,12 +62,14 @@ ORA_USER=myuser
 ORA_PASSWORD=YourPassword123
 ORA_DSN=localhost:1521/FREEPDB1
 ```
-Set appropriate privileges for myuser so that the user can create resources like tables and query dictionary tables like v$database. 
-Alternatively, set environment variables directly:
+
+Create an Oracle user "myuser". Set appropriate privileges for myuser so that the user can create resources like tables and query dictionary tables like v$database.
+
+Alternatively to .env, set environment variables directly:
 
 ```bash
 # Linux/macOS
-export ORA_USER=v
+export ORA_USER=myuser
 export ORA_PASSWORD=YourPassword123
 export ORA_DSN=localhost:1521/FREEPDB1
 
